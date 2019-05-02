@@ -1,0 +1,148 @@
+---
+title: "RandomForestMaizePricesPrediction"
+author: "Kevin Oluoch"
+date: "4/29/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, root.dir="D:/Jordan/PriceModelling") 
+```
+
+## Maize price prediction using a random forest model
+
+### Introduction
+Maize prices are determined by many factors; In an attempt at predictimng the maize prices in Tanzania, we created a spatial model using maize prices and several price determinat factors, at known locations across the country. The model was subsequently used to make a spatial predict of prices across the country.
+
+This supervised classification model was based on the Random forest algorithm. The Random forest algoritm was developed by Breiman and in this exercise we'll use the "randomForest" library in R which is based on a Fortran code developed by him and Cutler.
+
+### Required Libraries
+Load the "randomForest" and "raster"Libraries. We'll use the "raster" library to create and manipulate spatial data:
+```{r}
+library(randomForest)
+library(raster)
+```
+
+### Inputs
+#### input files
+
+```{r}
+####### INPUTS ########
+# INPUTS
+# Maize prices
+maize.price.path <- './data/TZ_maize_prices/local_maize_prices_2015.csv'
+
+# National Boundary
+natbnd.path <- './data/shp/gadm36_TZA_0.shp'
+
+# Prediction rasters
+raster.dir <- "./data/Tanzania/Markus" 
+
+```
+#### Input Variables
+```{r}
+# Responce variable
+responce <- "maipkg"
+# Prediction variables to use
+mypredictors <- c("BIO1", "BIO12", "BIO15", "BIO7", "BPP", 
+                  "CEC", "CP_mask","CPP", "DCELL", "DFRES", 
+                  "DGRES", "DLIGHT", "DOR1", "DOR2", "DOWS", 
+                  "DPARK", "DPOP1", "DPOP2", "DSET", "EVI", 
+                  "FIRE", "LSTD", "LSTN", "MB1", "MB2", "MB3", 
+                  "MB7", "MDEM", "NPPA", "NPPS", "PARA", 
+                  "PARV", "PH", "S1VV", "SLOPE", "SND", "SOC",
+                  "SWIR1", "SWIR2", "TIM", "WPOP", 
+                  "lon_modified", "lat_modified"
+                  )
+
+# Projections
+laea.prj <- CRS("+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+```
+
+#### Output Folder
+```{r}
+# OUTPUT FOLDER
+output.dir <- './output'
+```
+
+
+You can also embed plots, for example:
+
+
+
+## Create Training Data
+### Load prices data
+```{r}
+maize.price <- read.csv(maize.price.path)
+```
+
+
+```{r}
+##### LOAD PRICES DATA TO SPATIAL-DATA-FRAME #####
+dim(maize.price.local)
+
+# Use local because it has more entries
+head(maize.price.local)
+
+# Keep observations without 'NA' values in prices column
+summary(maize.price.local$maipkg)
+table(maize.price.local$maipkg) # NO 'NA' values
+# maize.price.local <- maize.price.local[!is.na(maize.price.local$maipkg),]
+```
+
+
+### Create spatialPointsDataframe
+We need a spatial Points Data frame -a 'spatialPointsDataframe' object in R- with prices data, which will be used to extract training data from prediction rasters. The Maize price locations have coordinates based on [WGS84](https://confluence.qps.nl/qinsy/en/world-geodetic-system-1984-wgs84-29855173.html)
+```{r}
+# wgs84.prj: projection for coordinates in prices csv
+wgs84.prj <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+```
+
+
+
+```{r}
+# Create spatialPointsDataframe with prices data
+maizeprice <- SpatialPointsDataFrame( data.frame( maize.price.local$lon_modified, maize.price.local$lat_modified ), 
+                                     maize.price.local[, !( names( maize.price.local ) %in% c('clusterid'))],
+                                     proj4string = wgs84.prj 
+                                     )
+
+# View points
+head(maizeprice@data)
+plot(maizeprice, axes=TRUE, pch = 20, col="Red")
+spplot(maizeprice, zcol=responce, col.regions=grey.colors(20, 0.9, 0.3))
+spplot(maizeprice, zcol=responce, col.regions=brewer.pal(5, "YlOrRd"), axes=TRUE)
+
+# Transform the points to the laea.prj projection
+maizeprice_laea <- spTransform(maizeprice, laea.prj)
+
+
+```
+
+```{r}
+#### SET UP POINTS DATA FOR MODEL CREATION ####
+# Create raster stack with rasters in raster.dir
+rasterstack <- stackcreator(raster.dir, laea.prj) # this stack holds all raster inputs
+
+# Extract mean value around (5km radius) maizeprice points, from raster stack
+# Buffer value is in meters
+extdata = extract(rasterstack, maizeprice_laea, buffer=5000, small=TRUE, fun = mean) # Takes Time ~ 1HR
+
+# add extracted attributes to point data
+maizepriceatt <- data.frame(cbind(extdata, "lon_modified" = maizeprice_laea$lon_modified, "lat_modified" = maizeprice_laea$lat_modified, "maipkg" = maizeprice$maipkg ))
+head(maizepriceatt)
+
+# # Convert factor variable columns to class 'factors'
+# modeldata[,factorcols] <- lapply(modeldata[,factorcols], factor)
+# sapply(modeldata, class)
+# head(modeldata)
+
+# Remove rows with NA values
+maizepriceatt <- maizepriceatt[complete.cases(maizepriceatt),]
+
+
+```
+
+
+

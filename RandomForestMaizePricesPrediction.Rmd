@@ -20,36 +20,122 @@ Models based on the [random forest algorithm (developed by Leo Breiman)](https:/
 In this exercise we use the "randomForest" library in R which is based on a FORTRAN code developed by Leo Breiman and Adele Cutler. The exercise is divided into four methodical steps: (I) The Data, (II) Classification Model, (III) Price Prediction, (IV) Analysis.
 
 ### (I) The Data
-We have two sets of data for this exersice: A csv(comma delimited file) with maize prices for diffrent locations in Tanzania and several raster files of  weather elements, soil properties and distance to infrastructure/amenities that encompase Tanzania. 
+There are two sets of data for this exersice: A csv(comma delimited file) with maize prices for diffrent locations in Tanzania; and several raster files of  weather elements, soil properties and distance to infrastructure/amenities that encompase Tanzania. 
 
-We convert the maize price csv to a shapefile, and use it to extract data from the rasters. This data -Training data - is used to create the random forest model with the extracted data as the predictors and maize price as the responce.
+We convert the maize price csv to a shapefile, and use it to extract data from the rasters. This extracted data -Training data - is used to create the random forest model as the predictors and the maize price from the csv as the responce. The Raster files are subsequently used to predict Maize prices in the whole of Tanzania.
+
+#### 1. maize prices data
+##### a) Load Maize Price Data
+Load the maize prices data into a dataframe(R object) using the "read.csv" function, which is a wrapper function for "read.table", customized for csv files.
+
+```{r }
+maize.price <- read.csv("./TZ_maize_prices_2015.csv")
+```
+
+We can view the first 6 rows of the data using the function "head"
+```{r}
+head(maize.price)
+```
 
 
-#### 1. Required Libraries
-Load the "randomForest" and "raster"Libraries. We'll use the "raster" library to create and manipulate spatial data:
+
+##### b) Create a Shapefile (spatialPointsDataframe)
+In creating  a shapefile (spatialPointsDataframe), you have to specify the coordinate system on which the points are based.
+The longitude and latitude values above are decimal degrees in the [WGS84](https://confluence.qps.nl/qinsy/en/world-geodetic-system-1984-wgs84-29855173.html) system. So first we create a WGS84 object of class "CRS" (coordinate reference system) that will be used to specify this system.
+
+```{r}
+library(sp)
+# wgs84.prj: projection for coordinates in prices csv
+wgs84.prj <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+```
+
+
+
+We then use the object to create a shapefile with an attribute table containing the Coordinates and price data. we then plot the shapefile to see  distribution of the locations and ensure they all lie within the borders.
+```{r}
+maizeprice <- SpatialPointsDataFrame( coords = data.frame( maize.price$Longitude, maize.price$Latitude ), 
+                                      data = maize.price,
+                                      proj4string = wgs84.prj 
+                                     )
+
+TZA_natbnd <- getData('GADM', country='TZA', level=0)
+plot(TZA_natbnd)
+plot(maizeprice, axes = TRUE, pch = 20, col = "Red", add = TRUE)
+```
+
+
+##### c) Shapefile Projection Transformation
+We convert the maize prices shapefile to the 
+ [Lambert azimuthal equal-area projection](https://en.wikipedia.org/wiki/Lambert_azimuthal_equal-area_projection) to match the raster data projecton. So first we create a lambert azimuthal equal-area (laea) projection object of class  "CRS" (coordinate reference system) and use it to transform the coordinates to the laea projection.
+```{r}
+laea.prj <- CRS("+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+maizeprice_laea <- spTransform(maizeprice, laea.prj)
+```
+
+
+#### 1. Raster Data Set (weather elements, soil properties and distance to amenities)
+##### a) Create raster stack
+To create a raster stack of weather elements, soil properties and distance to infrastructure/amenities data, we succesively load each raster then add it to the stack. The raster files with data on  should be in a single directory in the working environment. 
+We use the "raster" and "rgdal" libraries for creating and manipulating spatial data in R.
 ```{r echo=FALSE}
-library(randomForest)
 library(raster)
 library(rgdal)
-library(caret)
 ```
 
-### 3. Inputs
-#### input files
-Path to maize prices data
+Set up an empty stack to hold rasters and assign it the Lambert azimuthal equal-area projection, then add the rasters in the directors (named rasters in this exercise) to the stack in a "for" loop.
 ```{r}
-maize.price.path <- './TZ_maize_prices_2015.csv'
+rasterstack <- stack() 
+crs(rasterstack) <- laea.prj # raster::crs differs with sp::CRS
+
+rasterlist <- list.files(path = "./rasters", 
+                         pattern = "*.tif$", 
+                         full.names = TRUE) # Character vector of relative filepaths
+for (rasterpath in rasterlist) {
+      rasterfile <- raster(rasterpath)
+      rasterstack <- addLayer(rasterstack, rasterfile)
+    }
 ```
-The maize price variable name
+
+##### b) Add Latitude and Longitude Rasters
+We add longitude and latitude rasters to the stack so our model considers location in its prediction. The longitude and latitude rasters will have their longitude position and latitude position respectively, as the cell values.
+We use one raster from the stack as a reference to ensure the latitude and longitude rasters have the same properties.
 ```{r}
-responce <- "maipkg"
+refrenceraster <- rasterstack[[1]]
+```
+
+we'll create the latitude and longitude rasters that are inline with the national boundary  in 4 steps: Transform the Tanzania shapefile -downloaded earlier- to the Lambert azimuthal equal-area projection; change it to a raster with the reference raster's properties, extract the latitude and longitude values from the created raster; assign the values to two copies of the created raster: longitudes to one, latitudes to the other.
+
+```{r}
+natbnd_laea <- spTransform(TZA_natbnd, laea.prj)
+
+natbnd.raster <- rasterize(natbnd_laea, refrenceraster)
+
+latitudes <- xFromCell(natbnd.raster, 1:length(natbnd.raster))
+longitudes <- yFromCell(natbnd.raster, 1:length(natbnd.raster))
+
+natbnd.raster.lati <- natbnd.raster.long <- natbnd.raster
+values(natbnd.raster.lati) <- latitudes
+values(natbnd.raster.long) <- longitudes
+```
+
+
+Name the raster cell values and add them to the rasters stack
+```{r}
+names(natbnd.raster.long) <- "Longitude"
+names(natbnd.raster.lati) <- "Latitude"
+
+rasterstack <- stack(rasterstack, natbnd.raster.long, natbnd.raster.lati)
 ```
 
 
 
-Path to prediction rasters folder
+
+
+
+The prediction variables in the same order
 ```{r}
-raster.dir <- "./rasters" 
+names(rasterstack)
 ```
 
 The Prediction variables to use
@@ -68,141 +154,11 @@ mypredictors <- c("BIO1", "BIO12", "BIO15", "BIO7", "BPP",
 ```
 
 
-### 4. Get spatial context of Price data
-#### Load prices data
-```{r }
-maize.price <- read.csv(maize.price.path)
-```
-
-View the data-set
-```{r}
-head(maize.price)
-```
-
-
-#### Create spatialPointsDataframe
-We need a spatial Points Data frame -a 'spatialPointsDataframe' object in R- with prices data, which will be used to extract training data from prediction rasters. The Maize price locations have coordinates based on [WGS84](https://confluence.qps.nl/qinsy/en/world-geodetic-system-1984-wgs84-29855173.html). 
-First, we create a coordinate reference system object in R, for [WGS84](https://confluence.qps.nl/qinsy/en/world-geodetic-system-1984-wgs84-29855173.html) system
-```{r}
-# wgs84.prj: projection for coordinates in prices csv
-wgs84.prj <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
-```
-
-We then use the object to create a spatial points data frame. The spatial points data frame will have price data in the attribute table.
-
-```{r}
-maizeprice <- SpatialPointsDataFrame( data.frame( maize.price$Longitude, maize.price$Latitude ), 
-                                     maize.price[, !( names( maize.price ) %in% c('clusterid'))],
-                                     proj4string = wgs84.prj 
-                                     )
-```
-
-The raster data used in this exercise are in the [Lambert azimuthal equal-area projection](https://en.wikipedia.org/wiki/Lambert_azimuthal_equal-area_projection), which is suitable for the exercise because it preserves areas
-
-we create a coordinate reference system object of laea projection
-```{r}
-laea.prj <- CRS("+proj=laea +lat_0=5 +lon_0=20 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs +ellps=WGS84 +towgs84=0,0,0")
-```
-
-Then transform the coordinates to the laea projection
-```{r}
-maizeprice_laea <- spTransform(maizeprice, laea.prj)
-```
-
-Plot the maize price data to see distribution
-```{r}
-plot(maizeprice, axes=TRUE, pch = 20, col="Red")
-```
-
 
 
 ### 5. Extract training data
-#### Create raster stack
-Create raster stack with rasters in raster.dir
-for each location with maize price data, we'll extract training data. We'll create a raster stack while 
-Create a raster stack from the rasters in the directory given. Only rasters with the given coordinate reference system will be adopted
-
-Set up empty stack to hold rasters and assign the Coordinate reference system
-```{r}
-rasterstack <- stack()
-crs(rasterstack) <- laea.prj
-```
-
-Add the rasters in the folder specified earlier to stack by creating a character vector of their names the adding them one by one. 
-```{r}
-# Add the rasters in folder to stack
-    rasterlist <- list.files(path = raster.dir, pattern = "*.tif$")
-    rasterlist
-    
-    for (rastername in rasterlist) {
-      rasterfile <- raster(file.path(raster.dir, rastername))
-      rasterstack <- addLayer(rasterstack, rasterfile)
-    }
-```
 
 
-### 7. Prepare prediction rasters/data
-To make a prediction of Maize price in the whole country(Tanzania), We will use the stack of  rasters  from which we extracted training data plus two additional raster of longitude and  latitude - They were also used as prediction variables.
-
-#### Create latitude and longitude rasters
-We'll create two rasters: one with the longitude as the cell and the other with latitude as the cell value.
-We'll use one raster from the stack as a reference to ensure the latitude and longitude rasters have the same properties as the rasters in the stack
-```{r}
-refrenceraster <- rasterstack[[1]]
-```
-
-
-we'll create the latitude and longitude rasters that are inline with the national boundary  in 5 steps.
-(step 1). Download the nation (Tanzania) shapefile. 
-```{r}
-natbnd <- getData('GADM', country='TZA', level=0)
-```
-
-(step 2). Transform it to the raster's coordinate system.
-```{r}
-natbnd_laea <- spTransform(natbnd, laea.prj)
-```
-
-(step 3). Rasterise it while adopting the reference rasters properties
-```{r}
-natbnd.raster <- rasterize(natbnd_laea, refrenceraster)
-```
-
-
-
-(step 4). Extract the Latitude and longitude values from the National raster
-```{r}
-latitudes <- xFromCell(natbnd.raster, 1:length(natbnd.raster))
-longitudes <- yFromCell(natbnd.raster, 1:length(natbnd.raster))
-```
- 
-
-
-(step 5) Assign the extracted latitude and longitude values to copies of the National raster
-```{r}
-natbnd.raster.lati <- natbnd.raster.long <- natbnd.raster
-values(natbnd.raster.lati) <- latitudes
-values(natbnd.raster.long) <- longitudes
-```
-
-
-
-#### Assemble prediction raster stack
-Name the raster cell values
-```{r}
-names(natbnd.raster.long) <- "Longitude"
-names(natbnd.raster.lati) <- "Latitude"
-```
-
-Add them to the prediction rasters stack to maintain the order of the predictors with those used in the model
-```{r}
-rasterstack <- stack(rasterstack, natbnd.raster.long, natbnd.raster.lati)
-```
-
-The prediction variables in the same order
-```{r}
-names(rasterstack)
-```
 
 
 #### Extract training data
@@ -234,9 +190,21 @@ maizepriceatt <- maizepriceatt[complete.cases(maizepriceatt),]
 #### 6. FIT MODEL
 The random forest algorithm works by developing a model- with an optimal number of decision Trees - that will make known predictions from the training data. 
 
+Load the "randomForest" library
+```{r echo=FALSE}
+library(randomForest)
+```
+
+
 #### Tune the forest
 When running the random forest algorithm, we need to declare the optimal number of decision trees the algorithm should create. Too many Trees and the algorithm will over-fit the model and/or be unable to predict with new data; Too few Trees and the algorithm will under-fit the model and/or be unable to model the training data.
 We use "tuneRF", to get the optimal tree numbers
+
+The maize price variable name
+```{r}
+responce <- "MaizePrice_KG"
+```
+
 
 ```{r}
 trf <- tuneRF(x=maizepriceatt[, mypredictors],
@@ -307,6 +275,7 @@ non.spatial.prediction <- stats::predict(maizerfmodel, maizepriceatt[,mypredicto
 ```
 Evaluate the prediction
 ```{r}
+library(caret)
 round( RMSE( non.spatial.prediction,maizepriceatt[, responce] ) )
 ```
 

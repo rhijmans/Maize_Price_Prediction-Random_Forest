@@ -12,19 +12,19 @@ knitr::opts_chunk$set(echo = TRUE)
 ## Random Forest Prediction of Maize Prices
 
 ### Introduction
-Maize price estimates covering a continuous geographical area are difficult to generate - It costs a lot and takes time to collect the data. Using a supervised classification model that associates the maize prices and selected spatial variables in well distributed geographical locations in an area, one can predict the price in the whole area with the same spatial variables. An ideal model should be simple enough to develop and use, yet complex enough to emulate all empherical and/or theoretical associations. 
+Maize price estimates covering a continuous geographical area are difficult to collect: It costs a lot and takes time to collect the data. Using a supervised classification model that associates the maize prices at known locations and spatial variables, one can predict the maize price in other locations with the same spatial variables. An ideal model should be simple enough to develop and use, yet complex enough to emulate all empherical and/or theoretical associations. 
 
-Models based on the [random forest algorithm (developed by Leo Breiman)](https://link.springer.com/content/pdf/10.1023%2FA%3A1010933404324.pdf) attempt to achieve this ensemble. The random forest algorithm creates decision trees that classify the data into preditermined classes. The decision trees are created based on random subsets of the training data - input data. Each tree makes a classification of the data, with the final class being the mode.
+Models based on the [random forest algorithm (developed by Leo Breiman)](https://link.springer.com/content/pdf/10.1023%2FA%3A1010933404324.pdf) attempt to achieve this ensemble. The random forest algorithm creates decision trees that classify the data into preditermined classes. The decision trees are created based on random subsets of the training data - input data. Each tree makes a classification of the data to create a set of responces; the final class is the mode of these responces.
 
 
-In this exercise we use the "randomForest" library in R which is based on a FORTRAN code developed by Leo Breiman and Adele Cutler. The exercise is divided into four methodical steps: (I) The Data, (II) Classification Model, (III) Price Prediction, (IV) Analysis.
+In this exercise we use the "randomForest" library in R, which is based on a FORTRAN code developed by Leo Breiman and Adele Cutler. The exercise is divided into four methodical steps: (I) The Data, (II) Classification Model, (III) Price Prediction, (IV) Analysis.
 
 ### (I) The Data
-There are two sets of data for this exersice: A csv(comma delimited file) with maize prices for diffrent locations in Tanzania; and several raster files of  weather elements, soil properties and distance to infrastructure/amenities that encompase Tanzania. 
+There are two sets of data for this exersice: A csv(comma delimited file) with maize prices from diffrent locations in Tanzania; and several raster files of  weather elements, soil properties and distance to infrastructure/amenities that encompase Tanzania. 
 
 We convert the maize price csv to a shapefile, and use it to extract data from the rasters. This extracted data -Training data - is used to create the random forest model as the predictors and the maize price from the csv as the responce. The Raster files are subsequently used to predict Maize prices in the whole of Tanzania.
 
-#### 1. maize prices data
+#### 1. The Maize Prices data
 ##### a) Load Maize Price Data
 Load the maize prices data into a dataframe(R object) using the "read.csv" function, which is a wrapper function for "read.table", customized for csv files.
 
@@ -41,10 +41,15 @@ head(maize.price)
 
 ##### b) Create a Shapefile (spatialPointsDataframe)
 In creating  a shapefile (spatialPointsDataframe), you have to specify the coordinate system on which the points are based.
+We use the "sp", "raster" and "rgdal" R packages for creating and manipulating spatial data in this exercise. They are all add-on packages that have to be installed from CRAN.
+```{r echo=FALSE}
+library(raster) # Will load "sp" package as a dependency
+library(rgdal)
+```
 The longitude and latitude values above are decimal degrees in the [WGS84](https://confluence.qps.nl/qinsy/en/world-geodetic-system-1984-wgs84-29855173.html) system. So first we create a WGS84 object of class "CRS" (coordinate reference system) that will be used to specify this system.
 
+
 ```{r}
-library(sp)
 # wgs84.prj: projection for coordinates in prices csv
 wgs84.prj <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
 ```
@@ -74,14 +79,10 @@ maizeprice_laea <- spTransform(maizeprice, laea.prj)
 ```
 
 
-#### 1. Raster Data Set (weather elements, soil properties and distance to amenities)
+#### 2. Raster Data Set (weather elements, soil properties and distance to amenities)
 ##### a) Create raster stack
 To create a raster stack of weather elements, soil properties and distance to infrastructure/amenities data, we succesively load each raster then add it to the stack. The raster files with data on  should be in a single directory in the working environment. 
-We use the "raster" and "rgdal" libraries for creating and manipulating spatial data in R.
-```{r echo=FALSE}
-library(raster)
-library(rgdal)
-```
+
 
 Set up an empty stack to hold rasters and assign it the Lambert azimuthal equal-area projection, then add the rasters in the directors (named rasters in this exercise) to the stack in a "for" loop.
 ```{r}
@@ -109,9 +110,9 @@ we'll create the latitude and longitude rasters that are inline with the nationa
 ```{r}
 natbnd_laea <- spTransform(TZA_natbnd, laea.prj)
 
-natbnd.raster <- rasterize(natbnd_laea, refrenceraster)
+natbnd.raster <- rasterize(natbnd_laea, refrenceraster) # Takes time ~ 10 min
 
-latitudes <- xFromCell(natbnd.raster, 1:length(natbnd.raster))
+latitudes <- xFromCell(natbnd.raster, 1:length(natbnd.raster))  
 longitudes <- yFromCell(natbnd.raster, 1:length(natbnd.raster))
 
 natbnd.raster.lati <- natbnd.raster.long <- natbnd.raster
@@ -120,7 +121,7 @@ values(natbnd.raster.long) <- longitudes
 ```
 
 
-Name the raster cell values and add them to the rasters stack
+Name the raster cell values and add them to the rasters stack.
 ```{r}
 names(natbnd.raster.long) <- "Longitude"
 names(natbnd.raster.lati) <- "Latitude"
@@ -128,95 +129,63 @@ names(natbnd.raster.lati) <- "Latitude"
 rasterstack <- stack(rasterstack, natbnd.raster.long, natbnd.raster.lati)
 ```
 
-
-
-
-
-
-The prediction variables in the same order
+We end up with a raster stack of all the prediction variables. 
 ```{r}
 names(rasterstack)
 ```
 
-The Prediction variables to use
+
+#### 3. Create Training Data
+The responce variable - maize prices - is point data. To create model training data, we extract point data from the prediction variables - raster stack. A pixel value may have been afected by random errors or may be an outlier case. To get a representational value for all the points, we extract the mean value in pixels in a 5000 meters radius (ground distance)
 ```{r}
-# 
-mypredictors <- c("BIO1", "BIO12", "BIO15", "BIO7", "BPP", 
-                  "CEC", "CP_mask","CPP", "DCELL", "DFRES", 
-                  "DGRES", "DLIGHT", "DOR1", "DOR2", "DOWS", 
-                  "DPARK", "DPOP1", "DPOP2", "DSET", "EVI", 
-                  "FIRE", "LSTD", "LSTN", "MB1", "MB2", "MB3", 
-                  "MB7", "MDEM", "NPPA", "NPPS", "PARA", 
-                  "PARV", "PH", "S1VV", "SLOPE", "SND", "SOC",
-                  "SWIR1", "SWIR2", "TIM", "WPOP", 
-                  "Longitude", "Latitude"
-                  )
+# Takes Time ~ 20 min
+extdata = extract(rasterstack, 
+                  maizeprice_laea, 
+                  buffer=5000, # Meters
+                  small=TRUE, 
+                  fun = mean) 
+```
+
+
+some points may skew the classification model if they fall in an area with missing data in any of the prediction rasters.To improve accuracy of the model, we'll remove price locations that have "NA" values in any column of the extracted data.
+```{r}
+extdata <- extdata[complete.cases(extdata),]
+```
+
+View the training data.
+```{r}
+head(extdata, 3)
 ```
 
 
 
 
-### 5. Extract training data
 
 
+### (II) Classification Model - Random Forest
+
+The classification model is based on the random forest algorithm; which works by developing a model- with an optimal number of decision Trees - that will make known predictions from the training data. The decision at each tree split is made by considering a subset of the prediction variables. the
+so first, We get the optimal number of decision trees for the training data - in a process called tunning the forest, then we'll specify that value when creating the model by running the "randomForest" function. 
 
 
-#### Extract training data
-Extract the mean value in pixels ta 5 kilometer (5000 meters)-On the ground- radius around maize price points, from raster stack
-```{r}
-extdata = extract(rasterstack, maizeprice_laea, buffer=5000, small=TRUE, fun = mean) # Takes Time ~ 1HR
-```
-
-Add extracted attributes to point data
-```{r}
-maizepriceatt <- data.frame(cbind(extdata, "Longitude" = maizeprice_laea$Longitude, "Latitude" = maizeprice_laea$Latitude, "maipkg" = maizeprice$maipkg ))
-```
-
-View the data
-```{r}
-head(maizepriceatt)
-```
-
-#### Remove entries with missing(NA) values 
-To improve accuracy of the model, we'll remove price locations that lack data in any of the rasters. This may be due to lack of data in that area or due to the location falling outside the raster.
-
-```{r}
-maizepriceatt <- maizepriceatt[complete.cases(maizepriceatt),]
-```
-
-
-
-### (II) Classification Model
-#### 6. FIT MODEL
-The random forest algorithm works by developing a model- with an optimal number of decision Trees - that will make known predictions from the training data. 
-
-Load the "randomForest" library
+We'll use functions from the "randomForest" library for model creation and price prediction stages.
 ```{r echo=FALSE}
 library(randomForest)
 ```
 
-
 #### Tune the forest
-When running the random forest algorithm, we need to declare the optimal number of decision trees the algorithm should create. Too many Trees and the algorithm will over-fit the model and/or be unable to predict with new data; Too few Trees and the algorithm will under-fit the model and/or be unable to model the training data.
-We use "tuneRF", to get the optimal tree numbers
-
-The maize price variable name
-```{r}
-responce <- "MaizePrice_KG"
-```
+When running the random forest algorithm, we need to declare the optimal number of decision trees the algorithm should create. Too many Trees and the algorithm will over-fit the model and be to strict to make good predictions with new data; Too few Trees and the algorithm will under-fit the model and be unable to model the training data effectively. so first, we use "tuneRF" function from the "randomForest" library to get possible optimal number of trees. The "tuneRF" function requires two variables: the prediction variables and the responce variable. 
 
 
 ```{r}
-trf <- tuneRF(x=maizepriceatt[, mypredictors],
-              y=maizepriceatt[, responce]
+trf <- tuneRF(x=extdata, # Prediction variables
+              y=maizeprice_laea@data[, "MaizePrice_TZS.KG"] # Responce variable
               ) 
-trf
 ```
 
-We'll select the minimum number of trees from the optimal numbers given by considering the [Out-of-Bag error.](https://en.wikipedia.org/wiki/Out-of-bag_error)
+We then select the number of  variables to sample from the suggested optimal numbers by considering the [Out-of-Bag error.](https://en.wikipedia.org/wiki/Out-of-bag_error)
 ```{r}
-mintree <- trf[which.min(trf[,2]),1]
-mintree
+(mintree <- trf[which.min(trf[,2]),1])
 ```
 
 

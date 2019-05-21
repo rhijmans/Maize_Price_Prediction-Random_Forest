@@ -1,23 +1,24 @@
 ---
-title: "RandomForestMaizePricesPrediction"
+title: "Random Forest Prediction of Maize Prices"
 #author: "Kevin Oluoch"
 #date: "4/29/2019"
-output: html_document
+output: 
+  html_document:
+    toc: TRUE
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE) 
 ```
 
-## Random Forest Prediction of Maize Prices
 
 ### Introduction
 Maize price estimates covering a continuous geographical area are difficult to collect: It costs a lot and takes time to collect the data. Using a supervised classification model that associates the maize prices at known locations and spatial variables, one can predict the maize price in other locations with the same spatial variables. An ideal model should be simple enough to develop and use, yet complex enough to emulate all empherical and/or theoretical associations. 
 
-Models based on the [random forest algorithm (developed by Leo Breiman)](https://link.springer.com/content/pdf/10.1023%2FA%3A1010933404324.pdf) attempt to achieve this ensemble. The random forest algorithm creates decision trees that classify the data into preditermined classes. The decision trees are created based on random subsets of the training data - input data. Each tree makes a classification of the data to create a set of responces; the final class is the mode of these responces.
+Models based on the [random forest algorithm (developed by Leo Breiman)](https://link.springer.com/content/pdf/10.1023%2FA%3A1010933404324.pdf) attempt to achieve this ensemble. The random forest algorithm creates decision trees that classify the data into preditermined classes. The decision trees are created based on random subsets of the prediction variables. Each tree makes a classification of the data to create a set of responces; the final class is the mode of these responces.
 
 
-In this exercise we use the "randomForest" library in R, which is based on a FORTRAN code developed by Leo Breiman and Adele Cutler. The exercise is divided into four methodical steps: (I) The Data, (II) Classification Model, (III) Price Prediction, (IV) Analysis.
+In this exercise we use the "randomForest" library in R, which is based on a FORTRAN code developed by Leo Breiman and Adele Cutler. The exercise is divided into four methodical steps: (I) The Data, (II) Classification Model, (III) Price Prediction and Results Evaluation.
 
 ### (I) The Data
 There are two sets of data for this exersice: A csv(comma delimited file) with maize prices from diffrent locations in Tanzania; and several raster files of  weather elements, soil properties and distance to infrastructure/amenities that encompase Tanzania. 
@@ -165,16 +166,16 @@ head(extdata, 3)
 ### (II) Classification Model - Random Forest
 
 The classification model is based on the random forest algorithm; which works by developing a model- with an optimal number of decision Trees - that will make known predictions from the training data. The decision at each tree split is made by considering a subset of the prediction variables. the
-so first, We get the optimal number of decision trees for the training data - in a process called tunning the forest, then we'll specify that value when creating the model by running the "randomForest" function. 
+so first, We get the optimal number of prediction variables for each split - in a process called tunning the forest -  then we'll specify this optimal number when creating the model. 
 
 
-We'll use functions from the "randomForest" library for model creation and price prediction stages.
+We'll use functions from the "randomForest" library for forest tuning, model creation and price prediction stages.
 ```{r echo=FALSE}
 library(randomForest)
 ```
 
-#### Tune the forest
-When running the random forest algorithm, we need to declare the optimal number of decision trees the algorithm should create. Too many Trees and the algorithm will over-fit the model and be to strict to make good predictions with new data; Too few Trees and the algorithm will under-fit the model and be unable to model the training data effectively. so first, we use "tuneRF" function from the "randomForest" library to get possible optimal number of trees. The "tuneRF" function requires two variables: the prediction variables and the responce variable. 
+#### 1. Tune The Forest
+When running the random forest algorithm, we need to declare the optimal number variable should create. Too many prediction variables and the algorithm will over-fit the model and be to strict to make good predictions with new data; Too few prediction variables and the algorithm will under-fit the model and be unable to model the training data effectively. so first, we use "tuneRF" function from the "randomForest" library to get possible optimal number of prediction variables. The "tuneRF" function requires two variables: the prediction variables and the responce variable. 
 
 
 ```{r}
@@ -183,75 +184,74 @@ trf <- tuneRF(x=extdata, # Prediction variables
               ) 
 ```
 
-We then select the number of  variables to sample from the suggested optimal numbers by considering the [Out-of-Bag error.](https://en.wikipedia.org/wiki/Out-of-bag_error)
+We then select the number of  variables to sample from the suggested optimal numbers by considering the prediction error ( [Out-of-Bag error.](https://en.wikipedia.org/wiki/Out-of-bag_error) )
 ```{r}
 (mintree <- trf[which.min(trf[,2]),1])
 ```
 
 
-#### Fit the model
-We can then fit a model with the optimal number of trees. (Take a lot of time (~1 hour): Exact time will depend on the computer's RAM processor speed and other running programs)
+#### 2. Fit The Model
+We can then create a model that considers the optimal number of variables at each split. We also get the function to rank the prediction variables based on how important they are in the splits.
 ```{r}
-maizerfmodel <- randomForest(x=maizepriceatt[, mypredictors],
-                             y=maizepriceatt[, responce],
-                             mtry=mintree,importance = TRUE
+maizerfmodel <- randomForest(x=extdata,
+                             y=maizeprice_laea@data[, "MaizePrice_TZS.KG"],
+                             mtry=mintree,
+                             importance = TRUE # Assess importance of predictors.
                              )
 ```
 
-We can view the randomForest object
+#### 3.View The Model
+We can have a look at the model creation process in detail by plotting:
+the model gives a plot of number of trees against OOB error: the error rate for all trees upto that number of trees. 
 ```{r}
 maizerfmodel
-```
-
-plot it
-```{r}
 plot(maizerfmodel)
 ```
 
-A see the prediction variables in descending order of importance
+and/or the importance of each variables based on diffrent indeces given by the [importance function](https://www.rdocumentation.org/packages/randomForest/versions/4.6-14/topics/importance).
 ```{r}
 importance(maizerfmodel)
-```
-
-or a dot-chart of variable importance
-```{r}
 varImpPlot(maizerfmodel)
 ```
 
 
 
-### (III) Price Prediction
-#### 8. Make predictions
-The prediction can be done in two different ways: A spatial prediction and a non-spatial prediction
+### (III) Price Prediction and Results Evaluation
+In this section, we predict the price of maize across the country (Tanzania) using the data prepared in section one and the model created in section two. we will make the spatial prediction using the "predict" function in "raster" package, which will produce a raster file with the predicted maize prices as the pixel/cell values. we will then evaluate our prediction by comparing the values the model predicts with the actual prices collected at the training sites.
 
-#### Spatial Prediction
-made using the predict
+#### 1. Price Prediction
+We start with the prediction.
+
 ```{r}
-spatial.prediction <- raster::predict(rasterstack, maizerfmodel) # takes a long time!
+spatial.prediction <- raster::predict(rasterstack, # Prediction variable rasters
+                                      maizerfmodel # Prediction  model
+                                      ) # takes time!
 ```
 
-plot prediction
+The raster of predicted maize prices is our main output. we plot it to see the maize price( in Tanzania Shillings per Kilogram) distribution.
 ```{r}
+# Get Tanzania Regions Shapefile
+TZA_natbnd_1 <- getData('GADM', country='TZA', level=1)
+# Transform to laea projection
+TZA_natbnd_1_laea <- spTransform(TZA_natbnd_1, laea.prj)
+
 plot(spatial.prediction)
+plot(TZA_natbnd_1_laea, add = TRUE)
 ```
 
 
-#### Spatial Prediction
-made using the predict
+
+#### 2. Results Evaluation
+To assess how good the predictions are, We will compare the Observed maize prices with the predicted values. To get the  predicted values, we make a prediction using the training data set. since the training data set is point data as opposed to raster, we will make a non-spatial prediction. 
 ```{r}
-# non-spatial prediction and validation
-non.spatial.prediction <- stats::predict(maizerfmodel, maizepriceatt[,mypredictors])
-```
-Evaluate the prediction
-```{r}
-library(caret)
-round( RMSE( non.spatial.prediction,maizepriceatt[, responce] ) )
+non.spatial.prediction <- stats::predict(maizerfmodel, extdata)
 ```
 
-Plot the observed and predicted (non-spatial) values
+
+Comparing individual maize prices, does not give the complete picture so we plot the observed and predicted (non-spatial) values to see the general picture.
 ```{r}
 plot(
-  maizepriceatt[, responce],
+  maizeprice_laea@data[, "MaizePrice_TZS.KG"],
   non.spatial.prediction,
   col = 'blue',
   xlab = 'observed',
@@ -262,16 +262,6 @@ plot(
 ```
 
 
-### (IV) Analysis
-### 9. Assess the model
-By the “pseudo R-squared”: 1 - mse / Var(y).
-```{r}
-pseudo.Rsq <- mean(maizerfmodel$rsq)
-```
 
-By the difference between the observed and the predicted values.
-```{r}
-prediction.diff <- maizepriceatt[,mypredictors] - maizerfmodel$predicted
-head(prediction.diff)
-```
+
 

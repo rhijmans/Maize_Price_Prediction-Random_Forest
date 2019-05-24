@@ -12,17 +12,17 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
-### Introduction
+#### Introduction
 Maize price estimates covering a continuous geographical area are difficult to collect: It costs a lot and takes time to collect the data. Using the price of maize at known locations and the value of spatial variables at these locations, we can create a model for predicting maize prices. Given the values of the spatial variables, the model will consequently predict the price of maize in other locations.
 
 An ideal model should be simple enough to develop and use, yet complex enough to emulate all empirical and/or theoretical associations. Models based on the [random forest algorithm (developed by Leo Breiman)](https://link.springer.com/content/pdf/10.1023%2FA%3A1010933404324.pdf) attempts to achieve this ensemble. The random forest algorithm creates decision-trees that classify the data into predetermined classes - predetermined by the user(Supervised classification). Each decision-tree makes a classification of the data to create a set of responses; the most popular response (classification) is the final output.
 
 In this exercise, we use the "randomForest" library in R, which is based on a FORTRAN code developed by Leo Breiman and Adele Cutler. The exercise is divided into four methodical steps: (I) The Data, describes the data set; (II) Classification Model, describes the model creation steps; and (III) Price Prediction and Results,  describes the  price prediction process and the resulting output.
 
-### (I) The Data
+#### (I) The Data
 There are two sets of data for this exercise: A comma delimited file(CSV) with maize prices from different locations in Tanzania; and several raster files of weather elements, soil properties and distance to infrastructure/amenities that encompasses the whole of Tanzania. We convert the maize price CSV to a shapefile and use it to extract data from the rasters. This extracted data (Training data) is used to create the random forest model (as the predicting variables) together with the maize price from the CSV (as the response variables). The raster files are subsequently used to predict the price of maize in the whole of Tanzania. 
 
-#### 1. The Maize Prices data
+##### 1. The Maize Prices data
 This data is made up of maize prices collectted at various locations across Tanzania.
 We use the maize price data -given in Tanzania shillings per kilogram- in the shapefile format (spatial Points Dataframe) . To create this shapefile, we first load the maize prices data into a "data frame" (R object) using the "read.csv" function, which is a wrapper function for "read.table" that is customized for CSV files. 
 (We use the "sp", "raster" and "rgdal" R packages for creating and manipulating spatial data in this exercise. They are all add-on packages that have to be installed from CRAN.)
@@ -58,9 +58,9 @@ maizeprice_laea <- spTransform(maizeprice, laea.prj)
 ```
 
 
-#### 2. Raster Data Set
-##### a) Raster Data on Weather, Soil and Amenities
-The raster files contain data on weather elements, soil properties and distance to infrastructure/amenities. In this exercise, these files are in a sub-directory of the working directory. You can download them [here](https://www.dropbox.com/s/pshrtvjf7navegu/TZ_250m_2017.zip?raw=1).  The table below gives a short description of each file and a link to the source website.
+##### 2. Raster Data Set
+###### a) Raster Data on Weather, Soil and Amenities
+The raster files contain data on weather elements, soil properties and distance to infrastructure/amenities. In this exercise, these files are in a sub-directory of the working directory. You can download them [here](https://www.dropbox.com/s/ky5v72f1rq45gmg/rasters.zip?dl=0). The table below gives a short description of each file and a link to the source website.
 
 |Raster | Short description | Derived from:
 |:-----|:---------|:-----|
@@ -123,7 +123,7 @@ for (rasterpath in rasterlist) {
 ```
 
 
-##### b) Add Latitude and Longitude Rasters
+###### b) Add Latitude and Longitude Rasters
 We add longitude and latitude rasters to the stack so that our model considers location in its prediction. The longitude and latitude rasters will have the longitude values and latitude values respectively as the cell values. We use one raster from the stack created earlier as a reference, to ensure the latitude and longitude rasters have the same properties.
 ```{r}
 refrenceraster <- rasterstack[[1]]
@@ -161,7 +161,7 @@ names(rasterstack)
 
 
 
-### (II) Classification Model - Random Forest
+#### (II) Classification Model - Random Forest
 
 The classification model represents the relationship between the response variable (maize prices) and prediction variables (element of feature values in the raster files). It is based on the random forest algorithm, which works by creating decision-trees that "vote" on the most popular classification. The splits (branching) in the decision-trees are determined by random subsets of the prediction variables' values. The number of decision-trees to create and the number of variables considered at each split, are determined by the user. 
 We'll use the "randomForest" function from the "randomForest" library to create the model. We'll accept its default value for the number of decision-trees and determine the number of variables to use in each split using the "tuneRF" function (also from "randomForest" library).
@@ -184,20 +184,21 @@ predict.vrbs <- predict.vrbs[complete.cases(predict.vrbs),]
 
 
 
-#### 1. Tune The Forest
+##### 1. Tune The Forest
 By "tune the forest", we mean the process of determining the optimal number of variables to consider at each split in a decision-tree. Too many prediction variables and the algorithm will over-fit; too few prediction variables and the algorithm will under-fit. so first, we use "tuneRF" function from the "randomForest" library to get the possible optimal numbers of prediction variables. The "tuneRF" function takes two arguments: the prediction variables and the response variable. 
 ```{r}
 trf <- tuneRF(x=predict.vrbs, # Prediction variables
               y=maizeprice_laea@data[, "MaizePrice_TZS.KG"] # Responce variable
               )
 ```
+
 We consider the prediction error ( [Out-of-Bag error.](https://en.wikipedia.org/wiki/Out-of-bag_error) ) when selecting the optimal number, from the suggestions made by "tuneRF". 
 ```{r}
 (mintree <- trf[which.min(trf[,2]),1])
 ```
 
 
-#### 2. Fit The Model
+##### 2. Fit The Model
 We create a model with the "randomForest" function which takes as arguments: the response variable the prediction variables and the optimal number of variables to consider at each split. We also get the function to rank the prediction variables based on how much influence they have in the decision-trees' results.
 ```{r}
 price.model <- randomForest(x=predict.vrbs, # Prediction variables
@@ -218,10 +219,10 @@ varImpPlot(price.model)
 ```
 
 
-### (III) Price Prediction and Results Evaluation
+#### (III) Price Prediction and Results Evaluation
 In this section, we predict the price of maize across the country (Tanzania) using the data prepared in section one and the model created in section two. We make the prediction using the "predict" function in the "raster" package. The function produces a raster file, which has maize prices (TZS/KG) as the pixel/cell values. Finally, we evaluate the prediction by comparing the values the model predicts with the actual prices collected.
 
-#### 1. Price Prediction
+##### 1. Price Prediction
 The spatial prediction -the variables are spatial- function takes two arguments: the prediction variables and the price prediction model.  Both the "stats" package(loaded as a randomForest dependency) and the "raster" package have a function called "predict" that can make predictions. Since we are dealing with spatial data, we add a prefix to the function name to ensure the "predict" function in the raster "package" is used.
 ```{r}
 spatial.prediction <- raster::predict(rasterstack, # Prediction variable rasters
@@ -242,7 +243,7 @@ plot(TZA_natbnd_1_laea, add = TRUE)
 ```
 
 
-#### 2. Prediction Evaluation
+##### 2. Prediction Evaluation
 To assess the predictions, we will compare the observed maize prices (the training data) with the predicted maize prices (predicted using the training data). Considering that the training data, is in point form as opposed to raster, we will make a non-spatial prediction using the predict function in the "stats" package. We plot the observed and predicted values to see the trend. 
 ```{r}
 non.spatial.prediction <- stats::predict(price.model, predict.vrbs)
